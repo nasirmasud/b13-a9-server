@@ -1,6 +1,11 @@
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const express = require("express");
 const cors = require("cors");
+const {
+  createLocalJWKSet,
+  jwtVerify,
+  createRemoteJWKSet,
+} = require("jose-cjs");
 require("dotenv").config();
 
 const uri = process.env.MONGODB_URI;
@@ -18,9 +23,31 @@ const client = new MongoClient(uri, {
   },
 });
 
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+};
+
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("mediqueue");
     const tutorCollection = db.collection("tutors");
@@ -31,13 +58,37 @@ async function run() {
       res.json(tutors);
     });
 
+    app.get("/my-tutors/:email", async (req, res) => {
+      const { email } = req.params;
+      const result = await tutorCollection
+        .find({ tutorEmail: email })
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/tutor-bookings/:userId", async (req, res) => {
+      const { userId } = req.params;
+      const result = await tutorBookingCollection
+        .find({ userId: userId })
+        .toArray();
+      res.send(result);
+    });
+
+    app.delete("/tutor-bookings/:bookingId", async (req, res) => {
+      const { bookingId } = req.params;
+      const result = await tutorBookingCollection.deleteOne({
+        _id: new ObjectId(bookingId),
+      });
+      res.send(result);
+    });
+
     app.get("/featured-tutors", async (req, res) => {
       const tutors = await tutorCollection.find().limit(6);
       const result = await tutors.toArray();
       res.send(result);
     });
 
-    app.post("/tutor-bookings", async (req, res) => {
+    app.post("/tutor-bookings", verifyToken, async (req, res) => {
       const bookingData = req.body;
       const result = await tutorBookingCollection.insertOne(bookingData);
       res.send(result);
@@ -45,7 +96,6 @@ async function run() {
 
     app.post("/tutors", async (req, res) => {
       const tutorData = req.body;
-      console.log(tutorData);
 
       const result = await tutorCollection.insertOne(tutorData);
 
@@ -58,10 +108,42 @@ async function run() {
       res.json(result);
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
+    app.put("/tutors/:id", async (req, res) => {
+      const { id } = req.params;
+      const updatedData = req.body;
+      const result = await tutorCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedData },
+      );
+      res.json(result);
+    });
+
+    app.delete("/tutors/:id", async (req, res) => {
+      const { id } = req.params;
+      const result = await tutorCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.json(result);
+    });
+
+    app.patch("/tutors/:id/decrease-slot", async (req, res) => {
+      const { id } = req.params;
+      const tutor = await tutorCollection.findOne({ _id: new ObjectId(id) });
+      if (!tutor) {
+        return res.status(404).json({ message: "Tutor not found" });
+      }
+      const currentSlot = Number(tutor.totalSlot);
+      if (isNaN(currentSlot) || currentSlot <= 0) {
+        return res.status(400).json({ message: "No slots available" });
+      }
+      const result = await tutorCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { totalSlot: currentSlot - 1 } },
+      );
+      res.json(result);
+    });
+
+    // await client.db("admin").command({ ping: 1 });
   } finally {
     // await client.close();
   }
