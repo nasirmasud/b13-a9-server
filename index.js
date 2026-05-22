@@ -47,14 +47,33 @@ const verifyToken = async (req, res, next) => {
 
 async function run() {
   try {
-    // await client.connect();
+    await client.connect();
 
     const db = client.db("mediqueue");
     const tutorCollection = db.collection("tutors");
     const tutorBookingCollection = db.collection("tutorBookings");
 
     app.get("/tutors", async (req, res) => {
-      const tutors = await tutorCollection.find().toArray();
+      const { search, subject, city, price, mode } = req.query;
+      const filter = {};
+
+      if (search)
+        filter.$or = [
+          { tutorName: { $regex: search, $options: "i" } },
+          { subject: { $regex: search, $options: "i" } },
+          { institution: { $regex: search, $options: "i" } },
+        ];
+
+      if (subject) filter.subject = subject;
+      if (city) filter.district = city;
+      if (mode) filter.teachingMode = mode;
+
+      if (price) {
+        const [min, max] = price.split("-").map(Number);
+        filter.hourlyFee = { $gte: min, $lte: max };
+      }
+
+      const tutors = await tutorCollection.find(filter).toArray();
       res.json(tutors);
     });
 
